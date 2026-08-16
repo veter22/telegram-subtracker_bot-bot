@@ -6,12 +6,14 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from dotenv import load_dotenv
+from aiogram.client.session.aiohttp import AiohttpSession
 
 import database  # Подключаем нашу базу
 
 load_dotenv()
 
-bot = Bot(token=os.getenv('BOT_TOKEN'))
+session = AiohttpSession(proxy="http://127.0.0.1:10809")
+bot = Bot(token=os.getenv('BOT_TOKEN'), session=session)
 dp = Dispatcher()
 
 class AddSubscription(StatesGroup):
