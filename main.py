@@ -1,21 +1,24 @@
 import asyncio
 import logging
 import os
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from dotenv import load_dotenv
 from aiogram.client.session.aiohttp import AiohttpSession
 
-import database  # Подключаем нашу базу
+import keyboards  # Подключаем наш файл с клавиатурами
+import database   # Подключаем нашу базу
 
 load_dotenv()
 
+# Настраиваем прокси для обхода блокировок
 session = AiohttpSession(proxy="http://127.0.0.1:10809")
 bot = Bot(token=os.getenv('BOT_TOKEN'), session=session)
 dp = Dispatcher()
 
+# Класс для пошагового сбора данных о подписке
 class AddSubscription(StatesGroup):
     waiting_for_name = State()
     waiting_for_price = State()
@@ -23,10 +26,18 @@ class AddSubscription(StatesGroup):
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
+    # Сначала отправляем системное сообщение, чтобы показать нижнюю панель (Reply)
     await message.answer(
-        "Привет! Я SubTracker — твой менеджер подписок 🧊\n\n"
-        "Я помогу отследить, куда утекают деньги.\n"
-        "Введи /add, чтобы добавить подписку!"
+        "Настраиваю меню... ⚙️",
+        reply_markup=keyboards.get_reply_menu()
+    )
+    
+    # А затем уже красивое приветствие с Inline-кнопками
+    await message.answer(
+        "👋 Добро пожаловать в **SubTracker**!\n\n"
+        "Выберите действие:",
+        reply_markup=keyboards.get_main_menu(),
+        parse_mode="Markdown"
     )
 
 @dp.message(Command("add"))
@@ -34,10 +45,21 @@ async def cmd_add(message: types.Message, state: FSMContext):
     await message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
     await state.set_state(AddSubscription.waiting_for_name)
 
+# Обработчик нажатия на кнопку "➕ Добавить" из меню
+@dp.callback_query(F.data == "menu_add")
+async def cb_add_subscription(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer() # Убираем "часики" загрузки с кнопки
+    await callback.message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
+    await state.set_state(AddSubscription.waiting_for_name)
+
 @dp.message(AddSubscription.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer(f"Отлично, сервис **{message.text}**.\nСколько он стоит в месяц? (просто число, например: 299 или 15.50)", parse_mode="Markdown")
+    await message.answer(
+        f"Отлично, сервис **{message.text}**.\n"
+        f"Сколько он стоит в месяц? (просто число, например: 299 или 15.50)", 
+        parse_mode="Markdown"
+    )
     await state.set_state(AddSubscription.waiting_for_price)
 
 @dp.message(AddSubscription.waiting_for_price)
@@ -51,7 +73,7 @@ async def process_date(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     sub_name = user_data['name']
     
-    # Пробуем перевести цену и дату в числа (заменяем запятую на точку для дробей)
+    # Пробуем перевести цену и дату в числа
     try:
         sub_price = float(user_data['price'].replace(',', '.'))
         sub_date = int(message.text)
@@ -60,7 +82,7 @@ async def process_date(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Сохраняем в базу данных!
+    # Сохраняем в базу данных
     await database.add_subscription(message.from_user.id, sub_name, sub_price, sub_date)
     
     await message.answer(
