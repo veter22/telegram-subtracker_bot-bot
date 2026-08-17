@@ -1,7 +1,10 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
+# ==========================================
+# ИНЛАЙН-КЛАВИАТУРЫ (под сообщениями)
+# ==========================================
 def get_main_menu() -> InlineKeyboardMarkup:
-    """Создает главное меню с Inline-кнопками (прикрепляются к сообщению)."""
     # Создаем кнопки
     btn_list = InlineKeyboardButton(text="📋 Мои подписки", callback_data="menu_list")
     btn_add = InlineKeyboardButton(text="➕ Добавить", callback_data="menu_add")
@@ -11,41 +14,48 @@ def get_main_menu() -> InlineKeyboardMarkup:
     
     btn_faq = InlineKeyboardButton(text="❓ FAQ", callback_data="menu_faq")
 
-    # Собираем их в ряды (список списков)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [btn_list, btn_add],       # Первый ряд (2 кнопки)
-        [btn_stats, btn_settings], # Второй ряд (2 кнопки)
-        [btn_faq]                  # Третий ряд (1 кнопка по центру)
+    # Собираем их в ряды
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn_list, btn_add],
+        [btn_stats, btn_settings],
+        [btn_faq]
     ])
-    
-    return keyboard
 
+def get_back_keyboard() -> InlineKeyboardMarkup:
+    # Клавиатура с одной кнопкой "Назад"
+    btn_back = InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")
+    return InlineKeyboardMarkup(inline_keyboard=[[btn_back]])
+
+def get_settings_keyboard() -> InlineKeyboardMarkup:
+    # Клавиатура для раздела настроек
+    btn_currency = InlineKeyboardButton(text="💵 Валюта (скоро)", callback_data="settings_currency")
+    btn_time = InlineKeyboardButton(text="⏰ Уведомления (скоро)", callback_data="settings_time")
+    btn_back = InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [btn_currency, btn_time],
+        [btn_back]
+    ])
+
+# ==========================================
+# REPLY-КЛАВИАТУРЫ (нижняя панель)
+# ==========================================
 def get_reply_menu() -> ReplyKeyboardMarkup:
-    """Создает нижнюю (Reply) клавиатуру."""
+    # Обычные кнопки для нижней панели
+    btn_list = KeyboardButton(text="📋 Мои подписки")
+    btn_add = KeyboardButton(text="➕ Добавить")
     
-    # Создаем кнопки (текст как на твоем скриншоте)
-    btn_profile = KeyboardButton(text="👤 Профиль")
-    btn_balance = KeyboardButton(text="💰 Баланс")
-    
-    btn_purchases = KeyboardButton(text="🛒 Покупки")
-    btn_referrals = KeyboardButton(text="👥 Рефералы")
-    btn_shop = KeyboardButton(text="🛍️ Магазин")
+    btn_stats = KeyboardButton(text="📊 Статистика")
+    btn_settings = KeyboardButton(text="⚙️ Настройки")
     
     btn_faq = KeyboardButton(text="❓ FAQ")
-    btn_mirrors = KeyboardButton(text="🌐 Зеркала")
-    
-    btn_proxy = KeyboardButton(text="📌 Прокси для Telegram")
 
-    # Собираем клавиатуру в ряды
-    keyboard = ReplyKeyboardMarkup(
+    # Собираем ряды и включаем resize_keyboard
+    return ReplyKeyboardMarkup(
         keyboard=[
-            [btn_profile, btn_balance],               # 1 ряд
-            [btn_purchases, btn_referrals, btn_shop], # 2 ряд
-            [btn_faq, btn_mirrors],                   # 3 ряд
-            [btn_proxy]                               # 4 ряд (одна широкая кнопка)
+            [btn_list, btn_add],
+            [btn_stats, btn_settings],
+            [btn_faq]
         ],
-        resize_keyboard=True, # Делает кнопки компактными (по размеру текста)
-        input_field_placeholder="Выберите действие в меню 👇" # Текст в строке ввода
+        resize_keyboard=True
     )
-    
-    return keyboard

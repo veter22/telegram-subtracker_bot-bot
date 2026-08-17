@@ -5,34 +5,33 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from dotenv import load_dotenv
 from aiogram.client.session.aiohttp import AiohttpSession
+from dotenv import load_dotenv
 
-import keyboards  # Подключаем наш файл с клавиатурами
-import database   # Подключаем нашу базу
+import keyboards
+import database
 
 load_dotenv()
 
-# Настраиваем прокси для обхода блокировок
+# Настройка прокси
 session = AiohttpSession(proxy="http://127.0.0.1:10809")
 bot = Bot(token=os.getenv('BOT_TOKEN'), session=session)
 dp = Dispatcher()
 
-# Класс для пошагового сбора данных о подписке
 class AddSubscription(StatesGroup):
     waiting_for_name = State()
     waiting_for_price = State()
     waiting_for_date = State()
 
+# ==========================================
+# СТАРТ И ГЛАВНОЕ МЕНЮ
+# ==========================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    # Сначала отправляем системное сообщение, чтобы показать нижнюю панель (Reply)
-    await message.answer(
-        "Настраиваю меню... ⚙️",
-        reply_markup=keyboards.get_reply_menu()
-    )
+    # Системное сообщение для активации нижней панели (Reply)
+    await message.answer("Настраиваю меню... ⚙️", reply_markup=keyboards.get_reply_menu())
     
-    # А затем уже красивое приветствие с Inline-кнопками
+    # Главное сообщение с инлайн-меню
     await message.answer(
         "👋 Добро пожаловать в **SubTracker**!\n\n"
         "Выберите действие:",
@@ -40,28 +39,36 @@ async def cmd_start(message: types.Message):
         parse_mode="Markdown"
     )
 
-# Обрабатываем и команду /add, и нажатие на текстовую кнопку из нижней панели
+# Кнопка "Назад" (возвращает главное инлайн-меню)
+@dp.callback_query(F.data == "menu_main")
+async def cb_back_to_main(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "👋 Добро пожаловать в **SubTracker**!\n\n"
+        "Выберите действие:",
+        reply_markup=keyboards.get_main_menu(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# ==========================================
+# ДОБАВЛЕНИЕ ПОДПИСКИ
+# ==========================================
 @dp.message(Command("add"))
 @dp.message(F.text == "➕ Добавить")
 async def cmd_add(message: types.Message, state: FSMContext):
     await message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
     await state.set_state(AddSubscription.waiting_for_name)
 
-# Обработчик нажатия на кнопку "➕ Добавить" из меню
 @dp.callback_query(F.data == "menu_add")
 async def cb_add_subscription(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer() # Убираем "часики" загрузки с кнопки
+    await callback.answer() 
     await callback.message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
     await state.set_state(AddSubscription.waiting_for_name)
 
 @dp.message(AddSubscription.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer(
-        f"Отлично, сервис **{message.text}**.\n"
-        f"Сколько он стоит в месяц? (просто число, например: 299 или 15.50)", 
-        parse_mode="Markdown"
-    )
+    await message.answer(f"Отлично, сервис **{message.text}**.\nСколько он стоит в месяц? (просто число, например: 299 или 15.50)", parse_mode="Markdown")
     await state.set_state(AddSubscription.waiting_for_price)
 
 @dp.message(AddSubscription.waiting_for_price)
@@ -75,7 +82,6 @@ async def process_date(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     sub_name = user_data['name']
     
-    # Пробуем перевести цену и дату в числа
     try:
         sub_price = float(user_data['price'].replace(',', '.'))
         sub_date = int(message.text)
@@ -84,7 +90,6 @@ async def process_date(message: types.Message, state: FSMContext):
         await state.clear()
         return
     
-    # Сохраняем в базу данных
     await database.add_subscription(message.from_user.id, sub_name, sub_price, sub_date)
     
     await message.answer(
@@ -96,19 +101,17 @@ async def process_date(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+# ==========================================
+# МОИ ПОДПИСКИ
+# ==========================================
 async def get_subs_text(user_id: int) -> str:
-    # Получаем данные из базы
     subs = await database.get_subscriptions(user_id)
-    
     if not subs:
         return "У тебя пока нет добавленных подписок. Нажми «➕ Добавить», чтобы создать первую!"
         
     text = "📋 **Твои активные подписки:**\n\n"
     total_sum = 0
-    
-    # Перебираем подписки и формируем список
     for i, (name, price, billing_day) in enumerate(subs, start=1):
-        # Форматируем цену, чтобы убрать лишние нули (например, 299.0 -> 299)
         price_str = f"{price:g}" 
         text += f"{i}. **{name}** — {price_str} (списание {billing_day}-го числа)\n"
         total_sum += price
@@ -116,19 +119,82 @@ async def get_subs_text(user_id: int) -> str:
     text += f"\n➖➖➖➖➖➖➖➖➖➖\n💰 **Итого в месяц:** {total_sum:g}"
     return text
 
-# Обработчик для нижней панели (Reply-кнопка)
 @dp.message(F.text == "📋 Мои подписки")
 async def btn_list_subscriptions(message: types.Message):
-    text = await get_subs_text(message.from_user.id)
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(await get_subs_text(message.from_user.id), parse_mode="Markdown")
 
-# Обработчик для инлайн-меню (кнопка под сообщением)
 @dp.callback_query(F.data == "menu_list")
 async def cb_list_subscriptions(callback: types.CallbackQuery):
-    text = await get_subs_text(callback.from_user.id)
-    await callback.message.answer(text, parse_mode="Markdown")
-    await callback.answer() # Убираем часики загрузки
+    await callback.message.edit_text(await get_subs_text(callback.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
+    await callback.answer()
+
+# ==========================================
+# СТАТИСТИКА
+# ==========================================
+async def get_stats_text(user_id: int) -> str:
+    subs = await database.get_subscriptions(user_id)
+    if not subs:
+        return "📊 **Статистика**\n\nНет данных для анализа. Добавь первую подписку!"
     
+    total_sum = sum(sub[1] for sub in subs)
+    max_sub = max(subs, key=lambda x: x[1]) 
+    
+    return (
+        f"📊 **Твоя статистика:**\n\n"
+        f"📈 Всего подписок: **{len(subs)}**\n"
+        f"💰 Общий расход в месяц: **{total_sum:g}**\n\n"
+        f"🔥 Самая дорогая подписка:\n"
+        f"• **{max_sub[0]}** — {max_sub[1]:g}\n\n"
+        f"💸 Средний чек подписки: **{(total_sum/len(subs)):.2f}**"
+    )
+
+@dp.message(F.text == "📊 Статистика")
+async def btn_stats(message: types.Message):
+    await message.answer(await get_stats_text(message.from_user.id), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "menu_stats")
+async def cb_stats(callback: types.CallbackQuery):
+    await callback.message.edit_text(await get_stats_text(callback.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
+    await callback.answer()
+
+# ==========================================
+# НАСТРОЙКИ
+# ==========================================
+@dp.message(F.text == "⚙️ Настройки")
+async def btn_settings(message: types.Message):
+    await message.answer("⚙️ **Настройки профиля**\n\nЗдесь скоро можно будет выбрать базовую валюту и время напоминаний.", parse_mode="Markdown", reply_markup=keyboards.get_settings_keyboard())
+
+@dp.callback_query(F.data == "menu_settings")
+async def cb_settings(callback: types.CallbackQuery):
+    await callback.message.edit_text("⚙️ **Настройки профиля**\n\nЗдесь скоро можно будет выбрать базовую валюту и время напоминаний.", parse_mode="Markdown", reply_markup=keyboards.get_settings_keyboard())
+    await callback.answer()
+
+# ==========================================
+# FAQ
+# ==========================================
+async def get_faq_text() -> str:
+    return (
+        "❓ **Частые вопросы (FAQ)**\n\n"
+        "**1. Как добавить подписку?**\n"
+        "Нажми кнопку «➕ Добавить» и следуй инструкциям.\n\n"
+        "**2. Как бот напомнит о списании?**\n"
+        "Скоро мы добавим фоновые уведомления за 24 часа до списания!\n\n"
+        "**3. Как удалить подписку?**\n"
+        "Эта функция появится в ближайшем обновлении."
+    )
+
+@dp.message(F.text == "❓ FAQ")
+async def btn_faq(message: types.Message):
+    await message.answer(await get_faq_text(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "menu_faq")
+async def cb_faq(callback: types.CallbackQuery):
+    await callback.message.edit_text(await get_faq_text(), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
+    await callback.answer()
+
+# ==========================================
+# ЗАПУСК БОТА
+# ==========================================
 async def main():
     logging.basicConfig(level=logging.INFO)
     
