@@ -1,11 +1,14 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.client.session.aiohttp import AiohttpSession
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
 import keyboards
@@ -190,7 +193,7 @@ async def get_faq_text() -> str:
         "**1. Как добавить подписку?**\n"
         "Нажми кнопку «➕ Добавить» и следуй инструкциям.\n\n"
         "**2. Как бот напомнит о списании?**\n"
-        "Скоро мы добавим фоновые уведомления за 24 часа до списания!\n\n"
+        "Каждый день в 10:00 бот проверяет твои подписки и присылает уведомление, если завтра будет списание.\n\n"
         "**3. Как удалить подписку?**\n"
         "Открой «Мои подписки» и нажми кнопку с корзиной под списком."
     )
@@ -205,7 +208,33 @@ async def cb_faq(callback: types.CallbackQuery):
     await callback.answer()
 
 # ==========================================
-# ЗАПУСК БОТА
+# ФОНОВЫЕ УВЕДОМЛЕНИЯ
+# ==========================================
+async def check_and_send_reminders(bot: Bot):
+    # Вычисляем завтрашний день месяца
+    tomorrow = datetime.now() + timedelta(days=1)
+    target_day = tomorrow.day
+    
+    # Получаем все подписки на завтра
+    subs = await database.get_subscriptions_by_day(target_day)
+    
+    for user_id, name, price in subs:
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"⚠️ **Напоминание о списании!**\n\n"
+                    f"Завтра ({target_day}-го числа) с твоей карты спишется **{price:g}** за сервис **{name}**.\n\n"
+                    f"Если подписка больше не нужна, самое время её отменить!"
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            # Если пользователь заблокировал бота, просто логируем ошибку
+            logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+# ==========================================
+# ЗАПУСК БОТА И ПЛАНИРОВЩИКА
 # ==========================================
 async def main():
     logging.basicConfig(level=logging.INFO)
@@ -213,7 +242,20 @@ async def main():
     # Инициализируем базу данных перед запуском бота
     await database.init_db()
     
-    print("SubTracker запущен...")
+    # Настраиваем планировщик задач
+    scheduler = AsyncIOScheduler(timezone='Europe/Moscow')
+    
+    # Настраиваем запуск задачи каждый день в 10:00 утра
+    scheduler.add_job(
+        check_and_send_reminders, 
+        trigger='cron', 
+        hour=10, 
+        minute=0, 
+        kwargs={'bot': bot} # Передаем объект бота в функцию
+    )
+    scheduler.start()
+    
+    print("SubTracker и планировщик уведомлений запущены...")
     await dp.start_polling(bot)
 
 if __name__ == '__main__':

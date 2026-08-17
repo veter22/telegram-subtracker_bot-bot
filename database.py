@@ -38,3 +38,12 @@ async def delete_subscription(sub_id: int, user_id: int):
             (sub_id, user_id)
         )
         await db.commit()
+
+async def get_subscriptions_by_day(billing_day: int):
+    # Достаем подписки, у которых списание выпадает на переданный день
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT user_id, name, price FROM subscriptions WHERE billing_day = ?",
+            (billing_day,)
+        ) as cursor:
+            return await cursor.fetchall()
