@@ -39,7 +39,9 @@ async def cmd_start(message: types.Message):
     )
 
 @dp.callback_query(F.data == "menu_main")
-async def cb_back_to_main(callback: types.CallbackQuery):
+async def cb_back_to_main(callback: types.CallbackQuery, state: FSMContext):
+    # Очищаем состояния на случай, если мы нажали "Назад" в процессе добавления
+    await state.clear()
     await callback.message.edit_text(
         "👋 Добро пожаловать в **SubTracker**!\n\nВыберите действие:",
         reply_markup=keyboards.get_main_menu(),
@@ -48,54 +50,105 @@ async def cb_back_to_main(callback: types.CallbackQuery):
     await callback.answer()
 
 # ==========================================
-# ДОБАВЛЕНИЕ ПОДПИСКИ
+# БЕСШОВНОЕ ДОБАВЛЕНИЕ ПОДПИСКИ
 # ==========================================
 @dp.message(Command("add"))
 @dp.message(F.text == "➕ Добавить")
 async def cmd_add(message: types.Message, state: FSMContext):
-    await message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
+    # Удаляем сообщение пользователя
+    try: await message.delete()
+    except Exception: pass
+    
+    msg = await message.answer(
+        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):",
+        reply_markup=keyboards.get_back_keyboard()
+    )
+    # Запоминаем ID этого сообщения, чтобы редактировать его дальше
+    await state.update_data(main_msg_id=msg.message_id)
     await state.set_state(AddSubscription.waiting_for_name)
 
 @dp.callback_query(F.data == "menu_add")
 async def cb_add_subscription(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer() 
-    await callback.message.answer("Напиши название сервиса (например: Netflix, Яндекс.Плюс):")
+    await callback.message.edit_text(
+        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):",
+        reply_markup=keyboards.get_back_keyboard()
+    )
+    # Запоминаем ID инлайн-сообщения
+    await state.update_data(main_msg_id=callback.message.message_id)
     await state.set_state(AddSubscription.waiting_for_name)
+    await callback.answer()
 
 @dp.message(AddSubscription.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer(f"Отлично, сервис **{message.text}**.\nСколько он стоит в месяц? (число, например: 299 или 15.50)", parse_mode="Markdown")
+    data = await state.get_data()
+    
+    # Удаляем текст, который ввел пользователь, чтобы не засорять чат
+    try: await message.delete()
+    except Exception: pass
+    
+    # Обновляем наше сохраненное сообщение
+    await bot.edit_message_text(
+        text=f"Отлично, сервис **{message.text}**.\nСколько он стоит в месяц? (число, например: 299 или 15.50)",
+        chat_id=message.chat.id,
+        message_id=data['main_msg_id'],
+        parse_mode="Markdown",
+        reply_markup=keyboards.get_back_keyboard()
+    )
     await state.set_state(AddSubscription.waiting_for_price)
 
 @dp.message(AddSubscription.waiting_for_price)
 async def process_price(message: types.Message, state: FSMContext):
     await state.update_data(price=message.text)
-    await message.answer("Какого числа каждого месяца происходит списание? (от 1 до 31):")
+    data = await state.get_data()
+    
+    try: await message.delete()
+    except Exception: pass
+    
+    await bot.edit_message_text(
+        text="Какого числа каждого месяца происходит списание? (от 1 до 31):",
+        chat_id=message.chat.id,
+        message_id=data['main_msg_id'],
+        reply_markup=keyboards.get_back_keyboard()
+    )
     await state.set_state(AddSubscription.waiting_for_date)
 
 @dp.message(AddSubscription.waiting_for_date)
 async def process_date(message: types.Message, state: FSMContext):
-    user_data = await state.get_data()
-    sub_name = user_data['name']
+    data = await state.get_data()
+    sub_name = data['name']
+    
+    try: await message.delete()
+    except Exception: pass
     
     try:
-        sub_price = float(user_data['price'].replace(',', '.'))
+        sub_price = float(data['price'].replace(',', '.'))
         sub_date = int(message.text)
     except ValueError:
-        await message.answer("Кажется, в цене или дате была ошибка. Давай попробуем заново: /add")
-        await state.clear()
+        await bot.edit_message_text(
+            text="❌ Кажется, в цене или дате была ошибка. Давай попробуем заново:\n\n✍️ Напиши название сервиса:",
+            chat_id=message.chat.id,
+            message_id=data['main_msg_id'],
+            reply_markup=keyboards.get_back_keyboard()
+        )
+        await state.set_state(AddSubscription.waiting_for_name)
         return
     
     await database.add_subscription(message.from_user.id, sub_name, sub_price, sub_date)
     curr = await database.get_user_currency(message.from_user.id)
     
-    await message.answer(
-        f"✅ **Подписка сохранена в базу!**\n\n"
-        f"• Сервис: {sub_name}\n"
-        f"• Стоимость: {sub_price:g} {curr}\n"
-        f"• День списания: {sub_date}-е число",
-        parse_mode="Markdown"
+    # Завершаем диалог и возвращаем главное меню прямо в это же сообщение
+    await bot.edit_message_text(
+        text=(
+            f"✅ **Подписка сохранена!**\n\n"
+            f"• Сервис: {sub_name}\n"
+            f"• Стоимость: {sub_price:g} {curr}\n"
+            f"• День списания: {sub_date}-е число"
+        ),
+        chat_id=message.chat.id,
+        message_id=data['main_msg_id'],
+        parse_mode="Markdown",
+        reply_markup=keyboards.get_main_menu()
     )
     await state.clear()
 
@@ -120,6 +173,8 @@ async def get_subs_data(user_id: int):
 
 @dp.message(F.text == "📋 Мои подписки")
 async def btn_list_subscriptions(message: types.Message):
+    try: await message.delete()
+    except Exception: pass
     text, kb = await get_subs_data(message.from_user.id)
     await message.answer(text, parse_mode="Markdown", reply_markup=kb or keyboards.get_back_keyboard())
 
@@ -161,6 +216,8 @@ async def get_stats_text(user_id: int) -> str:
 
 @dp.message(F.text == "📊 Статистика")
 async def btn_stats(message: types.Message):
+    try: await message.delete()
+    except Exception: pass
     await message.answer(await get_stats_text(message.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
 
 @dp.callback_query(F.data == "menu_stats")
@@ -173,6 +230,8 @@ async def cb_stats(callback: types.CallbackQuery):
 # ==========================================
 @dp.message(F.text == "⚙️ Настройки")
 async def btn_settings(message: types.Message):
+    try: await message.delete()
+    except Exception: pass
     curr = await database.get_user_currency(message.from_user.id)
     await message.answer(
         f"⚙️ **Настройки профиля**\n\n"
@@ -225,6 +284,8 @@ async def get_faq_text() -> str:
 
 @dp.message(F.text == "❓ FAQ")
 async def btn_faq(message: types.Message):
+    try: await message.delete()
+    except Exception: pass
     await message.answer(await get_faq_text(), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
 
 @dp.callback_query(F.data == "menu_faq")
