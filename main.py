@@ -102,31 +102,43 @@ async def process_date(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# МОИ ПОДПИСКИ
+# МОИ ПОДПИСКИ И УДАЛЕНИЕ
 # ==========================================
-async def get_subs_text(user_id: int) -> str:
+async def get_subs_data(user_id: int):
     subs = await database.get_subscriptions(user_id)
     if not subs:
-        return "У тебя пока нет добавленных подписок. Нажми «➕ Добавить», чтобы создать первую!"
+        return "У тебя пока нет добавленных подписок. Нажми «➕ Добавить», чтобы создать первую!", None
         
     text = "📋 **Твои активные подписки:**\n\n"
     total_sum = 0
-    for i, (name, price, billing_day) in enumerate(subs, start=1):
+    for i, (sub_id, name, price, billing_day) in enumerate(subs, start=1):
         price_str = f"{price:g}" 
         text += f"{i}. **{name}** — {price_str} (списание {billing_day}-го числа)\n"
         total_sum += price
         
-    text += f"\n➖➖➖➖➖➖➖➖➖➖\n💰 **Итого в месяц:** {total_sum:g}"
-    return text
+    text += f"\n➖➖➖➖➖➖➖➖➖➖\n💰 **Итого в месяц:** {total_sum:g}\n\n_Нажми на кнопку ниже, чтобы удалить подписку:_"
+    return text, keyboards.get_subs_manage_keyboard(subs)
 
 @dp.message(F.text == "📋 Мои подписки")
 async def btn_list_subscriptions(message: types.Message):
-    await message.answer(await get_subs_text(message.from_user.id), parse_mode="Markdown")
+    text, kb = await get_subs_data(message.from_user.id)
+    await message.answer(text, parse_mode="Markdown", reply_markup=kb or keyboards.get_back_keyboard())
 
 @dp.callback_query(F.data == "menu_list")
 async def cb_list_subscriptions(callback: types.CallbackQuery):
-    await callback.message.edit_text(await get_subs_text(callback.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
+    text, kb = await get_subs_data(callback.from_user.id)
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb or keyboards.get_back_keyboard())
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_"))
+async def cb_delete_subscription(callback: types.CallbackQuery):
+    sub_id = int(callback.data.split("_")[1])
+    await database.delete_subscription(sub_id, callback.from_user.id)
+    await callback.answer("Подписка удалена! 🗑")
+    
+    # Обновляем сообщение со списком
+    text, kb = await get_subs_data(callback.from_user.id)
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb or keyboards.get_back_keyboard())
 
 # ==========================================
 # СТАТИСТИКА
@@ -136,21 +148,21 @@ async def get_stats_text(user_id: int) -> str:
     if not subs:
         return "📊 **Статистика**\n\nНет данных для анализа. Добавь первую подписку!"
     
-    total_sum = sum(sub[1] for sub in subs)
-    max_sub = max(subs, key=lambda x: x[1]) 
+    total_sum = sum(sub[2] for sub in subs)
+    max_sub = max(subs, key=lambda x: x[2]) 
     
     return (
         f"📊 **Твоя статистика:**\n\n"
         f"📈 Всего подписок: **{len(subs)}**\n"
         f"💰 Общий расход в месяц: **{total_sum:g}**\n\n"
         f"🔥 Самая дорогая подписка:\n"
-        f"• **{max_sub[0]}** — {max_sub[1]:g}\n\n"
+        f"• **{max_sub[1]}** — {max_sub[2]:g}\n\n"
         f"💸 Средний чек подписки: **{(total_sum/len(subs)):.2f}**"
     )
 
 @dp.message(F.text == "📊 Статистика")
 async def btn_stats(message: types.Message):
-    await message.answer(await get_stats_text(message.from_user.id), parse_mode="Markdown")
+    await message.answer(await get_stats_text(message.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
 
 @dp.callback_query(F.data == "menu_stats")
 async def cb_stats(callback: types.CallbackQuery):
@@ -180,12 +192,12 @@ async def get_faq_text() -> str:
         "**2. Как бот напомнит о списании?**\n"
         "Скоро мы добавим фоновые уведомления за 24 часа до списания!\n\n"
         "**3. Как удалить подписку?**\n"
-        "Эта функция появится в ближайшем обновлении."
+        "Открой «Мои подписки» и нажми кнопку с корзиной под списком."
     )
 
 @dp.message(F.text == "❓ FAQ")
 async def btn_faq(message: types.Message):
-    await message.answer(await get_faq_text(), parse_mode="Markdown")
+    await message.answer(await get_faq_text(), parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard())
 
 @dp.callback_query(F.data == "menu_faq")
 async def cb_faq(callback: types.CallbackQuery):

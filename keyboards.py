@@ -59,3 +59,14 @@ def get_reply_menu() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True
     )
+
+def get_subs_manage_keyboard(subs: list) -> InlineKeyboardMarkup:
+    buttons = []
+    # Для каждой подписки генерируем кнопку удаления
+    for sub_id, name, _, _ in subs:
+        buttons.append([
+            InlineKeyboardButton(text=f"🗑 Удалить {name}", callback_data=f"del_{sub_id}")
+        ])
+    # Кнопка назад
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
