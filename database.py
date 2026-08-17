@@ -1,6 +1,15 @@
 import aiosqlite
+import os
 
-DB_NAME = "subtracker.db"
+# Если мы запускаем бота на сервере Amvera (добавим этот флаг позже), 
+# сохраняем базу в защищенную папку /data. Иначе — локально.
+if os.getenv("AMVERA") == "1":
+    DB_NAME = "/data/subtracker.db"
+else:
+    DB_NAME = "subtracker.db"
+
+async def init_db():
+
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
