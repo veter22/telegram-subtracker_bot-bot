@@ -24,6 +24,7 @@ dp = Dispatcher()
 class AddSubscription(StatesGroup):
     waiting_for_name = State()
     waiting_for_price = State()
+    waiting_for_category = State()
     waiting_for_date = State()
 
 # ==========================================
@@ -40,7 +41,6 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "menu_main")
 async def cb_back_to_main(callback: types.CallbackQuery, state: FSMContext):
-    # Очищаем состояния на случай, если мы нажали "Назад" в процессе добавления
     await state.clear()
     await callback.message.edit_text(
         "👋 Добро пожаловать в **SubTracker**!\n\nВыберите действие:",
@@ -50,122 +50,114 @@ async def cb_back_to_main(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ==========================================
-# БЕСШОВНОЕ ДОБАВЛЕНИЕ ПОДПИСКИ
+# ДОБАВЛЕНИЕ ПОДПИСКИ (БЕСШОВНОЕ)
 # ==========================================
 @dp.message(Command("add"))
 @dp.message(F.text == "➕ Добавить")
 async def cmd_add(message: types.Message, state: FSMContext):
-    # Удаляем сообщение пользователя
     try: await message.delete()
     except Exception: pass
     
     msg = await message.answer(
-        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):",
+        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):", 
         reply_markup=keyboards.get_back_keyboard()
     )
-    # Запоминаем ID этого сообщения, чтобы редактировать его дальше
     await state.update_data(main_msg_id=msg.message_id)
     await state.set_state(AddSubscription.waiting_for_name)
 
 @dp.callback_query(F.data == "menu_add")
 async def cb_add_subscription(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):",
+        "✍️ Напиши название сервиса (например: Netflix, Яндекс.Плюс):", 
         reply_markup=keyboards.get_back_keyboard()
     )
-    # Запоминаем ID инлайн-сообщения
     await state.update_data(main_msg_id=callback.message.message_id)
     await state.set_state(AddSubscription.waiting_for_name)
     await callback.answer()
 
 @dp.message(AddSubscription.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    data = await state.get_data()
-    
-    # Удаляем текст, который ввел пользователь, чтобы не засорять чат
     try: await message.delete()
     except Exception: pass
-    
-    # Обновляем наше сохраненное сообщение
+    await state.update_data(name=message.text)
+    data = await state.get_data()
     await bot.edit_message_text(
-        text=f"Отлично, сервис **{message.text}**.\nСколько он стоит в месяц? (число, например: 299 или 15.50)",
-        chat_id=message.chat.id,
-        message_id=data['main_msg_id'],
-        parse_mode="Markdown",
-        reply_markup=keyboards.get_back_keyboard()
+        text=f"Отлично, **{message.text}**.\nСколько стоит в месяц? (число)", 
+        chat_id=message.chat.id, message_id=data['main_msg_id'], parse_mode="Markdown", reply_markup=keyboards.get_back_keyboard()
     )
     await state.set_state(AddSubscription.waiting_for_price)
 
 @dp.message(AddSubscription.waiting_for_price)
 async def process_price(message: types.Message, state: FSMContext):
-    await state.update_data(price=message.text)
-    data = await state.get_data()
-    
     try: await message.delete()
     except Exception: pass
+    await state.update_data(price=message.text)
+    data = await state.get_data()
+    await bot.edit_message_text(
+        text="К какой категории отнести сервис?", 
+        chat_id=message.chat.id, message_id=data['main_msg_id'], reply_markup=keyboards.get_categories_keyboard()
+    )
+    await state.set_state(AddSubscription.waiting_for_category)
+
+@dp.callback_query(AddSubscription.waiting_for_category, F.data.startswith("cat_"))
+async def cb_process_category(callback: types.CallbackQuery, state: FSMContext):
+    category = callback.data.split("_")[1]
+    await state.update_data(category=category)
+    data = await state.get_data()
     
     await bot.edit_message_text(
-        text="Какого числа каждого месяца происходит списание? (от 1 до 31):",
-        chat_id=message.chat.id,
-        message_id=data['main_msg_id'],
-        reply_markup=keyboards.get_back_keyboard()
+        text="Какого числа каждого месяца списание? (от 1 до 31):", 
+        chat_id=callback.message.chat.id, message_id=data['main_msg_id'], reply_markup=keyboards.get_back_keyboard()
     )
     await state.set_state(AddSubscription.waiting_for_date)
+    await callback.answer()
 
 @dp.message(AddSubscription.waiting_for_date)
 async def process_date(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    sub_name = data['name']
-    
     try: await message.delete()
     except Exception: pass
+    data = await state.get_data()
     
     try:
-        sub_price = float(data['price'].replace(',', '.'))
+        sub_price = float(str(data['price']).replace(',', '.'))
         sub_date = int(message.text)
     except ValueError:
         await bot.edit_message_text(
-            text="❌ Кажется, в цене или дате была ошибка. Давай попробуем заново:\n\n✍️ Напиши название сервиса:",
-            chat_id=message.chat.id,
-            message_id=data['main_msg_id'],
-            reply_markup=keyboards.get_back_keyboard()
+            text="❌ Ошибка в цене или дате.\nДавай заново.\n\n✍️ Напиши название сервиса:",
+            chat_id=message.chat.id, message_id=data['main_msg_id'], reply_markup=keyboards.get_back_keyboard()
         )
         await state.set_state(AddSubscription.waiting_for_name)
         return
     
-    await database.add_subscription(message.from_user.id, sub_name, sub_price, sub_date)
-    curr = await database.get_user_currency(message.from_user.id)
+    await database.add_subscription(message.from_user.id, data['name'], sub_price, sub_date, data['category'])
+    settings = await database.get_user_settings(message.from_user.id)
     
-    # Завершаем диалог и возвращаем главное меню прямо в это же сообщение
     await bot.edit_message_text(
         text=(
             f"✅ **Подписка сохранена!**\n\n"
-            f"• Сервис: {sub_name}\n"
-            f"• Стоимость: {sub_price:g} {curr}\n"
-            f"• День списания: {sub_date}-е число"
+            f"• Сервис: {data['name']}\n"
+            f"• Категория: {data['category']}\n"
+            f"• Стоимость: {sub_price:g} {settings['currency']}\n"
+            f"• Списание: {sub_date}-го числа"
         ),
-        chat_id=message.chat.id,
-        message_id=data['main_msg_id'],
-        parse_mode="Markdown",
-        reply_markup=keyboards.get_main_menu()
+        chat_id=message.chat.id, message_id=data['main_msg_id'], parse_mode="Markdown", reply_markup=keyboards.get_main_menu()
     )
     await state.clear()
 
 # ==========================================
-# МОИ ПОДПИСКИ И УДАЛЕНИЕ
+# МОИ ПОДПИСКИ
 # ==========================================
 async def get_subs_data(user_id: int):
     subs = await database.get_subscriptions(user_id)
-    if not subs:
-        return "У тебя пока нет добавленных подписок. Нажми «➕ Добавить», чтобы создать первую!", None
+    if not subs: return "У тебя пока нет подписок. Нажми «➕ Добавить»!", None
         
-    curr = await database.get_user_currency(user_id)
+    s = await database.get_user_settings(user_id)
+    curr = s['currency']
     text = "📋 **Твои активные подписки:**\n\n"
     total_sum = 0
     
-    for i, (sub_id, name, price, billing_day) in enumerate(subs, start=1):
-        text += f"{i}. **{name}** — {price:g} {curr} (списание {billing_day}-го числа)\n"
+    for i, (sub_id, name, price, billing_day, category) in enumerate(subs, start=1):
+        text += f"{i}. **{name}** ({category}) — {price:g} {curr} (до {billing_day}-го)\n"
         total_sum += price
         
     text += f"\n➖➖➖➖➖➖➖➖➖➖\n💰 **Итого в месяц:** {total_sum:g} {curr}\n\n_Нажми на кнопку ниже, чтобы удалить подписку:_"
@@ -189,7 +181,6 @@ async def cb_delete_subscription(callback: types.CallbackQuery):
     sub_id = int(callback.data.split("_")[1])
     await database.delete_subscription(sub_id, callback.from_user.id)
     await callback.answer("Подписка удалена! 🗑")
-    
     text, kb = await get_subs_data(callback.from_user.id)
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb or keyboards.get_back_keyboard())
 
@@ -198,21 +189,37 @@ async def cb_delete_subscription(callback: types.CallbackQuery):
 # ==========================================
 async def get_stats_text(user_id: int) -> str:
     subs = await database.get_subscriptions(user_id)
-    if not subs:
-        return "📊 **Статистика**\n\nНет данных для анализа. Добавь первую подписку!"
+    if not subs: return "📊 **Статистика**\n\nНет данных для анализа."
     
-    curr = await database.get_user_currency(user_id)
-    total_sum = sum(sub[2] for sub in subs)
+    s = await database.get_user_settings(user_id)
+    curr = s['currency']
+    total_sum = 0
+    cat_sums = {}
+    
+    for _, name, price, _, category in subs:
+        total_sum += price
+        cat_sums[category] = cat_sums.get(category, 0) + price
+        
     max_sub = max(subs, key=lambda x: x[2]) 
     
-    return (
+    text = (
         f"📊 **Твоя статистика:**\n\n"
         f"📈 Всего подписок: **{len(subs)}**\n"
         f"💰 Общий расход в месяц: **{total_sum:g} {curr}**\n\n"
         f"🔥 Самая дорогая подписка:\n"
         f"• **{max_sub[1]}** — {max_sub[2]:g} {curr}\n\n"
-        f"💸 Средний чек подписки: **{(total_sum/len(subs)):.2f} {curr}**"
+        f"🗂 **Распределение по категориям:**\n"
     )
+    
+    # Сортируем категории по сумме и строим прогресс-бары
+    sorted_cats = sorted(cat_sums.items(), key=lambda x: x[1], reverse=True)
+    for cat, c_sum in sorted_cats:
+        percent = (c_sum / total_sum) * 100 if total_sum > 0 else 0
+        filled = int(round(percent / 10))
+        bar = '█' * filled + '░' * (10 - filled)
+        text += f"`{cat:15}`\n`[{bar}] {percent:.0f}%` ({c_sum:g} {curr})\n\n"
+        
+    return text
 
 @dp.message(F.text == "📊 Статистика")
 async def btn_stats(message: types.Message):
@@ -228,44 +235,58 @@ async def cb_stats(callback: types.CallbackQuery):
 # ==========================================
 # НАСТРОЙКИ
 # ==========================================
+async def get_settings_text(user_id: int):
+    s = await database.get_user_settings(user_id)
+    days_str = "В день списания" if s['notif_days'] == 0 else f"За {s['notif_days']} дн."
+    return (
+        f"⚙️ **Настройки профиля**\n\n"
+        f"💵 Валюта: **{s['currency']}**\n"
+        f"⏰ Время уведомлений: **{s['notif_time']}**\n"
+        f"📅 Срок напоминания: **{days_str}**"
+    )
+
 @dp.message(F.text == "⚙️ Настройки")
 async def btn_settings(message: types.Message):
     try: await message.delete()
     except Exception: pass
-    curr = await database.get_user_currency(message.from_user.id)
-    await message.answer(
-        f"⚙️ **Настройки профиля**\n\n"
-        f"💵 Текущая валюта: **{curr}**\n"
-        f"⏰ Время уведомлений: **10:00**", 
-        parse_mode="Markdown", 
-        reply_markup=keyboards.get_settings_keyboard()
-    )
+    await message.answer(await get_settings_text(message.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_settings_keyboard())
 
 @dp.callback_query(F.data == "menu_settings")
 async def cb_settings(callback: types.CallbackQuery):
-    curr = await database.get_user_currency(callback.from_user.id)
-    await callback.message.edit_text(
-        f"⚙️ **Настройки профиля**\n\n"
-        f"💵 Текущая валюта: **{curr}**\n"
-        f"⏰ Время уведомлений: **10:00**", 
-        parse_mode="Markdown", 
-        reply_markup=keyboards.get_settings_keyboard()
-    )
+    await callback.message.edit_text(await get_settings_text(callback.from_user.id), parse_mode="Markdown", reply_markup=keyboards.get_settings_keyboard())
     await callback.answer()
 
 @dp.callback_query(F.data == "settings_currency")
 async def cb_settings_currency(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "Выбери базовую валюту для отображения цен и статистики:",
-        reply_markup=keyboards.get_currency_keyboard()
-    )
+    await callback.message.edit_text("Выбери базовую валюту:", reply_markup=keyboards.get_currency_keyboard())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("set_curr_"))
 async def cb_set_currency(callback: types.CallbackQuery):
-    selected_currency = callback.data.split("_")[2]
-    await database.set_user_currency(callback.from_user.id, selected_currency)
-    await callback.answer(f"Валюта изменена на {selected_currency} ✅")
+    val = callback.data.split("_")[2]
+    await database.update_user_setting(callback.from_user.id, "currency", val)
+    await cb_settings(callback)
+
+@dp.callback_query(F.data == "settings_time")
+async def cb_settings_time(callback: types.CallbackQuery):
+    await callback.message.edit_text("В какое время присылать уведомления?", reply_markup=keyboards.get_time_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_time_"))
+async def cb_set_time(callback: types.CallbackQuery):
+    val = callback.data.split("_")[2]
+    await database.update_user_setting(callback.from_user.id, "notif_time", val)
+    await cb_settings(callback)
+
+@dp.callback_query(F.data == "settings_days")
+async def cb_settings_days(callback: types.CallbackQuery):
+    await callback.message.edit_text("За сколько дней предупреждать о списании?", reply_markup=keyboards.get_days_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("set_days_"))
+async def cb_set_days(callback: types.CallbackQuery):
+    val = int(callback.data.split("_")[2])
+    await database.update_user_setting(callback.from_user.id, "notif_days", val)
     await cb_settings(callback)
 
 # ==========================================
@@ -277,9 +298,9 @@ async def get_faq_text() -> str:
         "**1. Как добавить подписку?**\n"
         "Нажми кнопку «➕ Добавить» и следуй инструкциям.\n\n"
         "**2. Как работает напоминание?**\n"
-        "Каждый день в 10:00 бот проверяет твои подписки и присылает уведомление, если завтра будет списание.\n\n"
-        "**3. Как удалить подписку?**\n"
-        "Открой «Мои подписки» и нажми кнопку с корзиной под списком."
+        "Зайди в «Настройки» и укажи удобное время и срок. Бот сам рассчитает, когда нужно прислать алерт.\n\n"
+        "**3. Как посмотреть графики трат?**\n"
+        "В разделе «Статистика» бот автоматически рисует прогресс-бары твоих расходов по категориям."
     )
 
 @dp.message(F.text == "❓ FAQ")
@@ -297,25 +318,39 @@ async def cb_faq(callback: types.CallbackQuery):
 # ФОНОВЫЕ УВЕДОМЛЕНИЯ
 # ==========================================
 async def check_and_send_reminders(bot: Bot):
-    tomorrow = datetime.now() + timedelta(days=1)
-    target_day = tomorrow.day
+    # Запускается каждый час. Получаем текущий час (например, "10:00")
+    current_time_str = datetime.now().strftime("%H:00")
     
-    subs = await database.get_subscriptions_by_day(target_day)
+    # Получаем настройки всех пользователей
+    users = await database.get_all_users_settings()
     
-    for user_id, name, price in subs:
-        curr = await database.get_user_currency(user_id)
-        try:
-            await bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"⚠️ **Напоминание о списании!**\n\n"
-                    f"Завтра ({target_day}-го числа) с твоей карты спишется **{price:g} {curr}** за сервис **{name}**.\n\n"
-                    f"Если подписка больше не нужна, самое время её отменить!"
-                ),
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+    for user_id, notif_time, notif_days, currency in users:
+        # Если время пользователя не совпадает с текущим часом — пропускаем
+        if notif_time != current_time_str:
+            continue
+            
+        # Вычисляем целевой день (если notif_days=1, значит ищем списания на завтра)
+        target_date = datetime.now() + timedelta(days=notif_days)
+        target_day = target_date.day
+        
+        # Берем подписки конкретного пользователя
+        subs = await database.get_subscriptions(user_id)
+        
+        for sub_id, name, price, billing_day, category in subs:
+            if billing_day == target_day:
+                days_text = "Завтра" if notif_days == 1 else ("Сегодня" if notif_days == 0 else f"Через {notif_days} дня")
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"⚠️ **Напоминание о списании!**\n\n"
+                            f"{days_text} ({target_day}-го числа) с твоей карты спишется **{price:g} {currency}** за сервис **{name}**.\n\n"
+                            f"Если подписка больше не нужна, самое время её отменить!"
+                        ),
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
 
 # ==========================================
 # ЗАПУСК БОТА И ПЛАНИРОВЩИКА
@@ -325,10 +360,12 @@ async def main():
     await database.init_db()
     
     scheduler = AsyncIOScheduler(timezone='Europe/Moscow')
+    
+    # Теперь планировщик запускается КАЖДЫЙ ЧАС (в 00 минут), а внутри сверяет настройки пользователей
     scheduler.add_job(
         check_and_send_reminders, 
         trigger='cron', 
-        hour=10, 
+        hour='*', 
         minute=0, 
         kwargs={'bot': bot}
     )
